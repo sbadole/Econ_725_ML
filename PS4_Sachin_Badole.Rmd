@@ -1,0 +1,460 @@
+---
+title: "Problem Set 4"
+author: "Sachin Badole"
+date: "12/1/2020"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r echo=TRUE}
+rm(list = ls(all = TRUE))
+setwd("/Users/sachin/Downloads/Econ_725/Problem Sets/Problem Set 4")
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+
+suppressMessages(library(h2o))
+suppressMessages(library(randomForest))
+suppressMessages(library(neuralnet))
+suppressMessages(library(data.table))
+suppressMessages(library(stargazer))
+suppressMessages(library(glmnet))
+suppressMessages(library(knitr))
+suppressMessages(library(tidyverse))
+
+```
+## Question 1 Monte Carlos
+
+a) Install the package “h2o” or both the “neuralnet” and “randomForest” packages in R.
+b) Estimate three sets of three models. For each, set the seed to 0, the sample size to 1,000, and allocate 50% of the data to a test sample.
+```{r echo=TRUE}
+set.seed(123)
+h2o.init()
+n=1000
+perc_train=.5
+specification1=T
+error=F
+sderror=.2
+
+set.seed(0)
+###############################################
+#Draw observable explanatory variables
+x1 = rgamma(n,2,1); x2 = rnorm(n,0,2);
+x3 = rweibull(n,2,2); x4 = rlogis(n,2,1);
+x5 = rbeta(n,2,1);
+x = cbind(x1,x2,x3,x4,x5)
+###############################################
+#transform into independent random variables
+# find the current correlation matrix
+c1 = var(x)
+
+# cholesky decomposition to get independence
+chol1 = solve(chol(c1))
+
+x= x%*%chol1 
+############################################### 
+#generate random correlation matrix
+R = matrix(runif(ncol(x)^2,-1,1), ncol=ncol(x))
+RtR = R %*% t(R)
+corr = cov2cor(RtR)
+# check that it is positive definite
+sum((eigen(corr)$values>0))==ncol(x)
+################################################
+#transform according to this correlation matrix
+x = x %*% chol(corr)
+
+################################################
+
+```
+
+Defined the test and train data.
+c) You’ll estimate three sets of three models. For each, set the seed to 0, the sample size to 1,000, and allocate 50% of the data to a test sample.
+
+i) Estimate a neural net with 3 hidden layers, each with 64, 32, and 16 neurons respectively. Use 100 epochs.
+
+## For n = 1000
+```{r nn2, echo=T, cache=TRUE}
+
+y1 = x1+((x3*(x2^2))/10)+(x4*x1*x5)/10
+y2 = x1+((x3*(x2^2))/10)+(x4*x1*x5)/10+rnorm(n,0,1)
+y3 = log(abs((x1^4)/10)+abs(x4)+(x3^2))+x4*x2*sin(x5)+rnorm(n,0,1)
+x <- cbind(x1,x2,x3,x4,x5,y1,y2,y3)
+x=data.table(x)
+names(x)=c("x1","x2","x3","x4","x5","y1","y2","y3")
+
+set.seed(0)
+
+smp_siz = floor(0.5*nrow(x))
+train_ind=sample(nrow(x),size=smp_siz)
+train =x[train_ind,]
+test=x[-train_ind,]
+rm(smp_siz)
+set.seed(0)
+h2o.init()
+
+#h2o.train=as.h2o(train)
+#h2o.test=as.h2o(test)
+
+yvar <- c('y1','y2','y3')
+
+# Run Machine Learning with Neural Net
+neuraln_mse <- c()
+for(i in yvar){
+  classifier <- h2o.deeplearning(x=c('x1','x2','x3','x4','x5'),y = i, training_frame = as.h2o(train),
+                                 validation_frame = as.h2o(test), activation = 'Rectifier', hidden = c(16,32,64),
+                              epochs = 100, seed = 420, reproducible = TRUE, standardize = TRUE, 
+                              train_samples_per_iteration = -2)  
+
+# MSE for the Test set results
+neuraln_mse[i] <- h2o.mse(classifier)
+}
+#data.frame(neuraln_mse)
+
+```
+ii) Estimate a series using the poly function. Set the degree to 3.
+iii) Estimate a random forest. Use 1000 trees with 4 covariates sampled each time.
+iv) Calculate the MSE on the test set for n=1000 and n=10,000.
+d) For specification 1, which performs best? Why?
+e) For specification 2, which performs best? Why?
+f) For specification 3, which performs best? Why?
+
+```{r nn3, echo = T, cache=T}
+
+## Run the 3 poly models 
+y1_ploy=lm(y1~poly(x1,x2,x3,x4,x5,degree=3),data=train)
+p=predict(y1_ploy,test)
+y1_poly_mse=mean((p-test$y1)^2)
+
+y2_ploy=lm(y2~poly(x1,x2,x3,x4,x5,degree=3),data=train)
+p=predict(y2_ploy,test)
+y2_poly_mse=mean((p-test$y2)^2)
+
+y3_ploy=lm(y3~poly(x1,x2,x3,x4,x5,degree=3),data=train)
+p=predict(y3_ploy,test)
+y3_poly_mse=mean((p-test$y3)^2)
+
+## Random Forest
+y1_rf <- randomForest(y1~x1+x2+x3+x4+x5,data=train)
+p=predict(y1_rf,test)
+y1_rf_mse=mean((p-test$y1)^2)
+
+y2_rf <- randomForest(y2~x1+x2+x3+x4+x5,data=train)
+p=predict(y2_rf,test)
+y2_rf_mse=mean((p-test$y2)^2)
+
+y3_rf <- randomForest(y3~x1+x2+x3+x4+x5,data=train)
+p=predict(y3_rf,test)
+y3_rf_mse=mean((p-test$y3)^2)
+
+
+poly_mse <- data.frame(poly_mse =c(y1_poly_mse, y2_poly_mse, y3_poly_mse), rf_mse = c(y1_rf_mse, y2_rf_mse, y3_rf_mse))
+
+# MSE results for n = 1000
+results_1000 <- data.frame(neuraln_mse, poly_mse)
+names(results_1000)=c("Neuraln Net", "Poly Model", "Random Forest")
+#results_1000
+kable(results_1000)
+```
+
+
+```{r}
+
+```
+
+## For n = 10000
+
+```{r echo=TRUE}
+set.seed(0)
+h2o.init(nthreads=-1)
+n=10000
+perc_train=.5
+specification1=T
+error=F
+sderror=.2
+
+set.seed(0)
+###############################################
+#Draw observable explanatory variables
+x1 = rgamma(n,2,1); x2 = rnorm(n,0,2);
+x3 = rweibull(n,2,2); x4 = rlogis(n,2,1);
+x5 = rbeta(n,2,1);
+x = cbind(x1,x2,x3,x4,x5)
+###############################################
+#transform into independent random variables
+# find the current correlation matrix
+c1 = var(x)
+
+# cholesky decomposition to get independence
+chol1 = solve(chol(c1))
+
+x= x%*%chol1 
+############################################### 
+#generate random correlation matrix
+R = matrix(runif(ncol(x)^2,-1,1), ncol=ncol(x))
+RtR = R %*% t(R)
+corr = cov2cor(RtR)
+# check that it is positive definite
+sum((eigen(corr)$values>0))==ncol(x)
+################################################
+#transform according to this correlation matrix
+x = x %*% chol(corr)
+
+################################################
+
+y1 = x1+((x3*(x2^2))/10)+(x4*x1*x5)/10
+y2 = x1+((x3*(x2^2))/10)+(x4*x1*x5)/10+rnorm(n,0,1)
+y3 = log(abs((x1^4)/10)+abs(x4)+(x3^2))+x4*x2*sin(x5)+rnorm(n,0,1)
+x <- cbind(x1,x2,x3,x4,x5,y1,y2,y3)
+x=data.table(x)
+names(x)=c("x1","x2","x3","x4","x5","y1","y2","y3")
+
+set.seed(0)
+
+smp_siz = floor(0.5*nrow(x))
+train_ind=sample(nrow(x),size=smp_siz)
+train =x[train_ind,]
+test=x[-train_ind,]
+rm(smp_siz)
+set.seed(0)
+h2o.init()
+
+#h2o.train=as.h2o(train)
+#h2o.test=as.h2o(test)
+
+yvar <- c('y1','y2','y3')
+
+# Run Machine Learning with Neural Net
+neuraln_mse <- c()
+for(i in yvar){
+  classifier <- h2o.deeplearning(x=c('x1','x2','x3','x4','x5'),y = i, training_frame = as.h2o(train),
+                                 validation_frame = as.h2o(test), activation = 'Rectifier', hidden = c(16,32,64),
+                              epochs = 100, seed = 420, reproducible = TRUE, standardize = TRUE, 
+                              train_samples_per_iteration = -2)  
+ 
+
+# MSE for the Test set results
+neuraln_mse[i] <- h2o.mse(classifier)
+}
+#data.frame(neuraln_mse)
+
+#######################################################
+
+## Run the 3 poly models 
+y1_ploy=lm(y1~poly(x1,x2,x3,x4,x5,degree=3),data=train)
+p=predict(y1_ploy,test)
+y1_poly_mse=mean((p-test$y1)^2)
+
+y2_ploy=lm(y2~poly(x1,x2,x3,x4,x5,degree=3),data=train)
+p=predict(y2_ploy,test)
+y2_poly_mse=mean((p-test$y2)^2)
+
+y3_ploy=lm(y3~poly(x1,x2,x3,x4,x5,degree=3),data=train)
+p=predict(y3_ploy,test)
+y3_poly_mse=mean((p-test$y3)^2)
+
+## Random Forest
+y1_rf <- randomForest(y1~x1+x2+x3+x4+x5,data=train)
+p=predict(y1_rf,test)
+y1_rf_mse=mean((p-test$y1)^2)
+
+y2_rf <- randomForest(y2~x1+x2+x3+x4+x5,data=train)
+p=predict(y2_rf,test)
+y2_rf_mse=mean((p-test$y2)^2)
+
+y3_rf <- randomForest(y3~x1+x2+x3+x4+x5,data=train)
+p=predict(y3_rf,test)
+y3_rf_mse=mean((p-test$y3)^2)
+
+
+poly_mse <- data.frame(poly_mse =c(y1_poly_mse, y2_poly_mse, y3_poly_mse), rf_mse = c(y1_rf_mse, y2_rf_mse, y3_rf_mse))
+
+# MSE results for n = 10000
+results_10000 <- data.frame(neuraln_mse, poly_mse)
+names(results_10000)=c("Neuraln Net", "Poly Model", "Random Forest")
+
+kable(results_10000)
+
+```
+### Answer for above queston 1:
+
+According to above calculation, the polynomial model performs best under the first specification y1 in the 1000 and 10000 cases. While poly is able to catch non-linear correlations among parameters, both Neural net and Random Forest based on linear models. For second specification y2, again polynomial model performs the best under the n=1000 case. but produces different MSE with polys under n=10000 case. It might because that polynomial model is able to catch and parse out more information than the random forest and neural net. The prediction performance of polynomial and random forest may be disturbed by randomness of the observations. Lastly third specification y3, neural net stands out good under n=1000 case and polynomial model performs better under n=10000 (and mse for poly and neural some what similar for n=1000). The 3rd function is much more complicated, which may cause the neural net to be affected by randomness with small training set. However, it outperforms the other two models with larger sample set which offers more information to learn from.
+
+## Question 2
+
+2) Go back to problem set 3. In addition to the five models you estimated there, estimate a neural net with the same five predictors you used in question 6. Use 300 epochs. How does it perform, in terms of MSE, relative to the cross-validated flexible logit model with those predictors?
+
+```{r echo=TRUE}
+# Merge data from problem set 3.
+datam <- read.csv("data_airm.csv")
+
+# create testing and training datasets
+testmarketind <- sample.int(nrow(datam), 1000, replace = F)
+markettest <- datam[testmarketind,]
+markettrain <- datam[-testmarketind,]
+
+lpm_carrier_market_in <- lm(carrier_market_in ~ num_competitors, data = markettrain)
+logit_carrier_market_in <- glm(carrier_market_in ~ num_competitors, family = binomial(link = "logit"), data = markettrain)
+probit_carrier_market_in <- glm(carrier_market_in ~ num_competitors, family = binomial(link = "probit"), data = markettrain)
+
+probs <- rep(0,times = length(unique(markettrain$num_competitors)))
+
+for (i in 1:length(unique(markettrain$num_competitors))){
+  nc <- unique(markettrain$num_competitors)[i]
+  
+  # calculate joint frequency of carrier_market_in and number of carriers i
+  if_ncarr_carrier_market_in <- ifelse(((markettrain$num_competitors == nc)
+                        & (markettrain$carrier_market_in == 1)),1,0)
+  sum_ncarr_carrier_market_in <- sum(if_ncarr_carrier_market_in) 
+  
+  # calculate frequency of number of carriers
+  if_ncarr <- ifelse(markettrain$num_competitors == nc, 1, 0)
+  sum_ncarr <- sum(if_ncarr)
+  
+  probs[i] <- (sum_ncarr_carrier_market_in/nrow(markettrain)) / (sum_ncarr/nrow(markettrain))
+}
+probs_nums <- data.frame(cbind(probs, unique(markettrain$num_competitors)))
+names(probs_nums) <- c("probs","num_competitors")
+probs_nums <- probs_nums[order(probs_nums$num_competitors),]
+
+#
+covars <- datam[, c("num_competitors", "average_distance_m.x", "market_size.x",
+                    "hub_route.x", "vacation_route.x", "slot_controlled.x",
+                    "market_income.x")]
+covar_train <- covars[-testmarketind,]
+covar_test <- covars[testmarketind,]
+testpoly <- poly(as.matrix(covar_test), degree = 2, raw = T)
+carrier_market_in_train <- datam$carrier_market_in[-testmarketind]
+carrier_market_in_test <- datam$carrier_market_in[testmarketind]
+glm_mat <- cbind(carrier_market_in_train, poly(as.matrix(covar_train), degree = 2, raw = T))
+
+L1cvnet <- cv.glmnet(x = poly(as.matrix(covar_train), degree = 2, raw = T),
+                     y = carrier_market_in_train, alpha = 1, family = "binomial", type.measure = "mse")
+L1logitnet <- glmnet(x =  poly(as.matrix(covar_train), degree = 2, raw = T),
+                     y = carrier_market_in_train, family = "binomial")
+L1cvmin <- L1cvnet$lambda.min
+
+# Find MSE for each model
+mselpm <- mean((carrier_market_in_test - predict(lpm_carrier_market_in, markettest))^2)
+mselogit <- mean((carrier_market_in_test - predict(logit_carrier_market_in, markettest, type = "response"))^2)
+mseprobit <- mean((carrier_market_in_test - predict(probit_carrier_market_in, markettest, type = "response"))^2)
+
+nonpartest <- merge(markettest, probs_nums, by = "num_competitors")
+msenonpar <- mean((nonpartest$carrier_market_in - nonpartest$probs)^2)
+mseL1logit <- mean((carrier_market_in_test - predict(L1logitnet,testpoly,type = "response", s = L1cvmin))^2)
+
+# For Neural Net
+
+mkt_var <- c("carrier_market_in","num_competitors", "average_distance_m.x", "market_size.x",
+                    "hub_route.x", "vacation_route.x", "slot_controlled.x",
+                    "market_income.x")
+data_st <- datam[,c("carrier_market_in","num_competitors", "average_distance_m.x", "market_size.x",
+                    "hub_route.x", "vacation_route.x", "slot_controlled.x", "market_income.x")]
+
+maxs2 <- apply(data_st, 2, max) 
+mins2 <- apply(data_st, 2, min)
+data_st <- as.data.frame(scale(data_st,center = mins2, scale = maxs2 - mins2))
+
+nn_test<- data_st[testmarketind,mkt_var]
+nn_train <- data_st[-testmarketind,mkt_var]
+
+suppressMessages(library(h2o))
+h2o.init(nthreads = -1)
+classifier2 <- h2o.deeplearning(x=mkt_var[-1],y = 'carrier_market_in', training_frame = as.h2o(nn_train),
+                              validation_frame = as.h2o(nn_test), activation = 'Rectifier', hidden = c(16,32,64),
+                              epochs = 300, train_samples_per_iteration = -2)
+
+nn_mse2 <- h2o.mse(classifier2)
+
+mses <- round(c(mselpm, mselogit, mseprobit, msenonpar, mseL1logit,nn_mse2),4)
+models <- c("Linear Probability", "Logit", "Probit", "Nonparametric", "L_1 Regularized","Neural Network")
+mses <- data.frame("Model" = models, "MSE" = mses)
+
+kable(mses)
+```
+**Answer for above question 2 :**
+
+From the table above, we observe that the Neural Network perform better than the other method. It may because the NN classifier catches more information among the factors by building hidden layers.
+
+## Question 3 
+3) Group markets using kmeans and agglomerative hierarchical clustering.
+
+a) Load the file “PS4 mkt.R”.
+b) For c) through e), use the average price, average distance, nonstop miles, number of carriers, and hhi as covariates.
+c) Use the kmeans function to cluster the origin and destination pairs in the data into 2 clusters. Calculate summary statistics for each of them. How would you best characterize these clusters qualitatively?
+d) Now, use the kmeans function to cluster the origin and destination pairs in the data into 4 clusters.
+e) Use the hclust function to perform agglomerative clustering. Plot the dendrogram. Using the cutree function with k = 4, compare the results of this clustering algorithm with those in part d.
+
+``````{r nn8, echo = T, cache=T}
+load('PS4_mkt.R')
+
+set.seed(0)
+cov.cl <- c("average_price","average_distance","nonstop_miles","num_carriers","hhi")
+datamcluster <- datam[cov.cl]
+kmeanscluster <- kmeans(datamcluster, 2, nstart=10)
+datam$cluster <- kmeanscluster$cluster
+# Summarize
+m <- datam %>%
+group_by(cluster) %>%
+  select(average_price,average_distance,nonstop_miles,num_carriers,hhi,cluster) %>%
+  summarise_all(mean)
+
+s <- datam %>%
+group_by(cluster) %>%
+  select(average_price,average_distance,nonstop_miles,num_carriers,hhi,cluster) %>%
+  summarise_all(sd)
+```
+# Mean
+```{r echo=TRUE}
+kable(m)
+```
+# SD
+```{r echo=TRUE}
+kable(s)
+```
+
+**Answer for above question 3 :**
+
+Above cluster splits samples into one with higher price, longer distance and nonstop miles, more carriers and a smaller HHI, the other group with the opposite features. Intuitively, this clustering separate larger, commercial airports with smaller, private ones.
+
+```{r nn9, echo = T, cache=T}
+kmeanscluster_4gr <- kmeans(datamcluster, 4, nstart=10)
+datam$cluster4 <- kmeanscluster_4gr$cluster
+
+# Summarize
+m1 <- datam %>%
+group_by(cluster4) %>%
+  select(average_price,average_distance,nonstop_miles,num_carriers,hhi,cluster) %>%
+  summarise_all(mean)
+
+s1 <- datam %>%
+group_by(cluster4) %>%
+  select(average_price,average_distance,nonstop_miles,num_carriers,hhi,cluster) %>%
+  summarise_all(sd)
+```
+# Mean
+```{r echo=TRUE}
+kable(m1)
+```
+# SD
+```{r echo=TRUE}
+kable(s1)
+```
+
+
+```{r nn10, echo = T, cache=T}
+
+d <- dist(datamcluster, method = "euclidean")
+hc <- hclust(d, method = "ward.D2")
+plot(hc,cex=0.6,hang=-1)
+
+ct4 <- cutree(hc, k = 4) 
+table(kmean4=kmeanscluster_4gr$cluster,hclust4 = ct4)
+
+```
+
